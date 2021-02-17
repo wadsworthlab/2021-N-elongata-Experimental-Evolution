@@ -1,0 +1,394 @@
+#####################################
+#Commensal Neisseria Project
+#July 2020
+#####################################
+
+#Run FASTQC locally
+
+~/Desktop/software/FastQC/fastqc [file 1] [file2] [etc.]
+
+
+#####################################
+
+#Trimmomatic: Trim out adapter sequences
+cp /Users/cbwsbi/Desktop/software/Trimmomatic-0.39/adapters/NexteraPE-PE.fa ./
+
+#!/bin/bash
+for i in $(ls *_001.fastq.gz | rev | cut -c 16- | rev | uniq)
+do
+java -classpath /Users/cbwsbi/Desktop/software/Trimmomatic-0.39/trimmomatic-0.39.jar org.usadellab.trimmomatic.TrimmomaticPE -phred33 -trimlog trim.txt ./${i}R1_001.fastq.gz ./${i}R2_001.fastq.gz ./${i}R1_001-clean.fastq.gz ./${i}R1_001-unpaired.fastq.gz ./${i}R2_001-clean.fastq.gz ./${i}R2_001-unpaired.fastq.gz ILLUMINACLIP:NexteraPE-PE.fa:2:30:10 LEADING:3 TRAILING:3 SLIDINGWINDOW:4:15 MINLEN:36
+done
+
+#####################################
+#Bowtie2 to Pilon: Variant calling
+
+module load gcc/6.2.0
+module load bowtie2/2.3.4.3
+
+bowtie2-build AR-0945.fasta AR0945_Index
+
+#!/bin/bash
+for i in $(ls *_001-clean.fastq.gz | rev | cut -c 22- | rev | uniq)
+do
+sbatch -p short -c 4 -t 0-12:00:00 --mem-per-cpu=5G --wrap="bowtie2 --end-to-end --very-sensitive -x AR0945_Index -1 ${i}R1_001-clean.fastq.gz -2 ${i}R2_001-clean.fastq.gz -S ${i}sam.sam"
+done
+
+module load gcc/6.2.0
+module load samtools/1.10
+
+#!/bin/bash
+for i in $(ls *_L001_sam.sam | rev | cut -c 14- | rev | uniq)
+do
+sbatch -p short -c 4 -t 0-12:00:00 --mem-per-cpu=5G --wrap="samtools view -bS -o ${i}.bam ${i}_L001_sam.sam"
+done
+
+#!/bin/bash
+for i in $(ls *.bam | rev | cut -c 5- | rev | uniq)
+do
+sbatch -p short -c 4 -t 0-12:00:00 --mem-per-cpu=5G --wrap="samtools sort -o ${i}-sorted.bam ${i}.bam"
+done
+
+#!/bin/bash
+for i in $(ls *-sorted.bam)
+do
+sbatch -p short -c 4 -t 0-12:00:00 --mem-per-cpu=5G --wrap="samtools index ${i}"
+done
+
+module load java/jdk-1.8u112
+
+#!/bin/bash
+for i in $(ls *-sorted.bam | rev | cut -c 12- | rev | uniq)
+do
+sbatch -p short -c 4 -t 0-12:00:00 --mem-per-cpu=5G --wrap="java -Xmx16G -jar /n/data1/hsph/immid/grad/software/pilon/pilon-1.16.jar --genome AR-0945.fasta --frags ${i} -sorted.bam --output ${i} --vcf --tracks --minqual 15"
+done
+
+#!/bin/bash
+for i in $(ls *.vcf)
+do
+perl -anle 'if ($F[4]!~/\\./){print;}' ${i} | grep -E '(PASS)' > ${i}.filtered
+done
+
+chmod +x compile_pilon.sh
+
+############################################
+#Identifying SNPs in drug-selected strains that are not present in no drug strains
+############################################
+
+ND2 <- read.csv("~/Desktop/VCF/ND2_S9.vcf.filtered", sep="\t", head=F)
+ND3 <- read.csv("~/Desktop/VCF/ND3_S10.vcf.filtered", sep="\t", head=F)
+ND4 <- read.csv("~/Desktop/VCF/ND4_S11.vcf.filtered", sep="\t", head=F)
+ND5 <- read.csv("~/Desktop/VCF/ND5_S12.vcf.filtered", sep="\t", head=F)
+AR0945 <- read.csv("~/Desktop/VCF/AR0945_S13.vcf.filtered", sep="\t", head=F)
+
+ND2 <- ND2[,-3:-10]
+ND3 <- ND3[,-3:-10]
+ND4 <- ND4[,-3:-10]
+ND5 <- ND5[,-3:-10]
+AR0945 <- AR0945[,-3:-10]
+
+ND2$node_position <- with(ND2, paste(V1, V2, sep="_"))
+ND3$node_position <- with(ND3, paste(V1, V2, sep="_"))
+ND4$node_position <- with(ND4, paste(V1, V2, sep="_"))
+ND5$node_position <- with(ND5, paste(V1, V2, sep="_"))
+AR0945$node_position <- with(AR0945, paste(V1, V2, sep="_"))
+
+Incorrect <- rbind(ND2,ND3, ND4,ND5,AR0945)
+Incorrect$x <- rep("x",69)
+Incorrect <- Incorrect[,-1:-2]
+
+AM1 <- read.csv("~/Desktop/VCF/AM1_S1.vcf.filtered", sep="\t", head=F)
+AM1 $node_position <- with(AM1, paste(V1, V2, sep="_"))
+AM1_x <- merge(AM1, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+AM1_x_final <- subset(AM1_x, !(x %in% wordList))
+AM1_x_final$strain <- rep("AM1", dim(AM1_x_final)[1])
+
+CBW11 <- read.csv("~/Desktop/VCF/CBW11_S5.vcf.filtered", sep="\t", head=F)
+CBW11$node_position <- with(CBW11, paste(V1, V2, sep="_"))
+CBW11_x <- merge(CBW11, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW11_x_final <- subset(CBW11_x, !(x %in% wordList))
+CBW11_x_final$strain <- rep("CBW11", dim(CBW11_x_final)[1])
+
+CBW23 <- read.csv("~/Desktop/VCF/CBW23_S4.vcf.filtered", sep="\t", head=F)
+CBW23$node_position <- with(CBW23, paste(V1, V2, sep="_"))
+CBW23_x <- merge(CBW23, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW23_x_final <- subset(CBW23_x, !(x %in% wordList))
+CBW23_x_final$strain <- rep("CBW23", dim(CBW23_x_final)[1])
+
+CBW31 <- read.csv("~/Desktop/VCF/CBW31_S3.vcf.filtered", sep="\t", head=F)
+CBW31$node_position <- with(CBW31, paste(V1, V2, sep="_"))
+CBW31_x <- merge(CBW31, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW31_x_final <- subset(CBW31_x, !(x %in% wordList))
+CBW31_x_final$strain <- rep("CBW31", dim(CBW31_x_final)[1])
+
+CBW41 <- read.csv("~/Desktop/VCF/CBW41_S4.vcf.filtered", sep="\t", head=F)
+CBW41$node_position <- with(CBW41, paste(V1, V2, sep="_"))
+CBW41_x <- merge(CBW41, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW41_x_final <- subset(CBW41_x, !(x %in% wordList))
+CBW41_x_final$strain <- rep("CBW41", dim(CBW41_x_final)[1])
+
+CBW51 <- read.csv("~/Desktop/VCF/CBW51_S5.vcf.filtered", sep="\t", head=F)
+CBW51$node_position <- with(CBW51, paste(V1, V2, sep="_"))
+CBW51_x <- merge(CBW51, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW51_x_final <- subset(CBW51_x, !(x %in% wordList))
+CBW51_x_final$strain <- rep("CBW51", dim(CBW51_x_final)[1])
+
+CBW52 <- read.csv("~/Desktop/VCF/CBW52_S6.vcf.filtered", sep="\t", head=F)
+CBW52$node_position <- with(CBW52, paste(V1, V2, sep="_"))
+CBW52_x <- merge(CBW52, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW52_x_final <- subset(CBW52_x, !(x %in% wordList))
+CBW52_x_final$strain <- rep("CBW52", dim(CBW52_x_final)[1])
+
+CBW61 <- read.csv("~/Desktop/VCF/CBW61_S7.vcf.filtered", sep="\t", head=F)
+CBW61$node_position <- with(CBW61, paste(V1, V2, sep="_"))
+CBW61_x <- merge(CBW61, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW61_x_final <- subset(CBW61_x, !(x %in% wordList))
+CBW61_x_final$strain <- rep("CBW61", dim(CBW61_x_final)[1])
+
+CBW62 <- read.csv("~/Desktop/VCF/CBW62_S8.vcf.filtered", sep="\t", head=F)
+CBW62$node_position <- with(CBW62, paste(V1, V2, sep="_"))
+CBW62_x <- merge(CBW62, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+CBW62_x_final <- subset(CBW62_x, !(x %in% wordList))
+CBW62_x_final$strain <- rep("CBW62", dim(CBW62_x_final)[1])
+
+EW2 <- read.csv("~/Desktop/VCF/EW2_S10.vcf.filtered", sep="\t", head=F)
+EW2$node_position <- with(EW2, paste(V1, V2, sep="_"))
+EW2_x <- merge(EW2, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+EW2_x_final <- subset(EW2_x, !(x %in% wordList))
+EW2_x_final$strain <- rep("EW2", dim(EW2_x_final)[1])
+
+JA2 <- read.csv("~/Desktop/VCF/JA2_S7.vcf.filtered", sep="\t", head=F)
+JA2$node_position <- with(JA2, paste(V1, V2, sep="_"))
+JA2_x <- merge(JA2, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+JA2_x_final <- subset(JA2_x, !(x %in% wordList))
+JA2_x_final$strain <- rep("JA2", dim(JA2_x_final)[1])
+
+JC1 <- read.csv("~/Desktop/VCF/JC1_S2.vcf.filtered", sep="\t", head=F)
+JC1$node_position <- with(JC1, paste(V1, V2, sep="_"))
+JC1_x <- merge(JC1, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+JC1_x_final <- subset(JC1_x, !(x %in% wordList))
+JC1_x_final$strain <- rep("JC1", dim(JC1_x_final)[1])
+
+JC3 <- read.csv("~/Desktop/VCF/JC3_S3.vcf.filtered", sep="\t", head=F)
+JC3$node_position <- with(JC3, paste(V1, V2, sep="_"))
+JC3_x <- merge(JC3, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+JC3_x_final <- subset(JC3_x, !(x %in% wordList))
+JC3_x_final$strain <- rep("JC3", dim(JC3_x_final)[1])
+
+JM2 <- read.csv("~/Desktop/VCF/JM2_S11.vcf.filtered", sep="\t", head=F)
+JM2$node_position <- with(JM2, paste(V1, V2, sep="_"))
+JM2_x <- merge(JM2, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+JM2_x_final <- subset(JM2_x, !(x %in% wordList))
+JM2_x_final$strain <- rep("JM2", dim(JM2_x_final)[1])
+
+JR1 <- read.csv("~/Desktop/VCF/JR1_S2.vcf.filtered", sep="\t", head=F)
+JR1$node_position <- with(JR1, paste(V1, V2, sep="_"))
+JR1_x <- merge(JR1, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+JR1_x_final <- subset(JR1_x, !(x %in% wordList))
+JR1_x_final$strain <- rep("JR1", dim(JR1_x_final)[1])
+
+LJT1 <- read.csv("~/Desktop/VCF/LJT1_S8.vcf.filtered", sep="\t", head=F)
+LJT1$node_position <- with(LJT1, paste(V1, V2, sep="_"))
+LJT1_x <- merge(LJT1, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+LJT1_x_final <- subset(LJT1_x, !(x %in% wordList))
+LJT1_x_final$strain <- rep("LJT1", dim(LJT1_x_final)[1])
+
+LJT3 <- read.csv("~/Desktop/VCF/LJT3_S9.vcf.filtered", sep="\t", head=F)
+LJT3$node_position <- with(LJT3, paste(V1, V2, sep="_"))
+LJT3_x <- merge(LJT3, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+LJT3_x_final <- subset(LJT3_x, !(x %in% wordList))
+LJT3_x_final$strain <- rep("LJT3", dim(LJT3_x_final)[1])
+
+LT1<- read.csv("~/Desktop/VCF/LT1_S1.vcf.filtered", sep="\t", head=F)
+LT1$node_position <- with(LT1, paste(V1, V2, sep="_"))
+LT1_x <- merge(LT1, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+LT1_x_final <- subset(LT1_x, !(x %in% wordList))
+LT1_x_final$strain <- rep("LT1", dim(LT1_x_final)[1])
+
+MRS3<- read.csv("~/Desktop/VCF/MRS3_S12.vcf.filtered", sep="\t", head=F)
+MRS3$node_position <- with(MRS3, paste(V1, V2, sep="_"))
+MRS3_x <- merge(MRS3, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+MRS3_x_final <- subset(MRS3_x, !(x %in% wordList))
+MRS3_x_final$strain <- rep("MRS3", dim(MRS3_x_final)[1])
+
+PAP1<- read.csv("~/Desktop/VCF/PAP1_S6.vcf.filtered", sep="\t", head=F)
+PAP1$node_position <- with(PAP1, paste(V1, V2, sep="_"))
+PAP1_x <- merge(PAP1, Incorrect, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+PAP1_x_final <- subset(PAP1_x, !(x %in% wordList))
+PAP1_x_final$strain <- rep("PAP1", dim(PAP1_x_final)[1])
+
+final_dat <- rbind(AM1_x_final,CBW11_x_final,CBW23_x_final,CBW31_x_final,CBW41_x_final,CBW51_x_final,CBW52_x_final,PAP1_x_final, MRS3_x_final, LT1_x_final,LJT3_x_final,LJT1_x_final,JR1_x_final,JM2_x_final,JC3_x_final,CBW61_x_final,JC1_x_final,JA2_x_final,EW2_x_final,CBW62_x_final)
+write.csv(final_dat,"~/Desktop/final_dat.csv")
+
+#############################################
+
+#Spades de novo assembly
+
+#Make dummy.yaml file
+[
+{
+orientation: "fr",
+type: "paired-end",
+right reads: [ "/Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun022Requeue-201719518/XXXR1_001-clean.fastq.gz"
+],
+left reads: [
+"/Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun022Requeue-201719518/XXXR2_001-clean.fastq.gz"
+]
+}
+]
+
+
+#!/bin/bash
+while read i <&3; do
+echo "$(cat dummy.yaml)" | sed "s/XXX/${i}/g" > ${i}yaml.yaml
+/Users/cbwsbi/Desktop/software/SPAdes-3.14.1-Darwin/bin/spades.py -t 4 --isolate --dataset /Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun022Requeue-201719518/${i}yaml.yaml -o /Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun022Requeue-201719518/${i}assembly 
+done 3<./libraries_1.txt
+
+chmod +x assembly_SPADES.sh
+./assembly_SPADES.sh
+
+
+[
+{
+orientation: "fr",
+type: "paired-end",
+right reads: [ "/Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun023ReQueue-201485284/XXXR1_001-clean.fastq.gz"
+],
+left reads: [
+"/Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun023ReQueue-201485284/XXXR2_001-clean.fastq.gz"
+]
+}
+]
+
+#!/bin/bash
+while read i <&3; do
+echo "$(cat dummy.yaml)" | sed "s/XXX/${i}/g" > ${i}yaml.yaml
+/Users/cbwsbi/Desktop/software/SPAdes-3.14.1-Darwin/bin/spades.py -t 4 --isolate --dataset /Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun023ReQueue-201485284/${i}yaml.yaml -o /Users/cbwsbi/Desktop/2020-NelongataExperimentalEvolutionAZI/sequencing-data/SequencingRun023ReQueue-201485284/${i}assembly 
+done 3<./libraries_1.txt
+
+chmod +x assembly_SPADES.sh
+./assembly_SPADES.sh
+
+
+
+#############################################
+#Adding transformants: Call mutations that were transformed
+#############################################
+
+module load bowtie
+
+sbatch -p tier3 -c 1 -t 0-12:00:00 --mem-per-cpu=10G --wrap="bowtie2-build AR-0945.fasta AR0945_INDEX"
+
+
+#!/bin/bash
+module load bowtie
+for i in $(ls *_001.fastq.gz | rev | cut -c 16- | rev | uniq)
+do
+sbatch -p tier3 -c 1 -t 0-12:00:00 --mem-per-cpu=10G --wrap="bowtie2 --end-to-end --very-sensitive -x AR0945_INDEX -1 ${i}R1_001.fastq.gz -2 ${i}R2_001.fastq.gz -S ${i}aligned.sam"
+done
+
+
+module load samtools
+
+#!/bin/bash
+for i in $(ls *sam | rev | cut -c 5- | rev | uniq)
+do
+sbatch -p tier3 -c 1 -t 0-12:00:00 --mem-per-cpu=10G --wrap="samtools view -bS -o ${i}.bam ${i}.sam"
+done
+
+#!/bin/bash
+for i in $(ls *bam | rev | cut -c 5- | rev | uniq)
+do
+sbatch -p tier3 -c 1 -t 0-12:00:00 --mem-per-cpu=10G --wrap="samtools sort -o ${i}.sorted.bam ${i}.bam"
+done
+
+#!/bin/bash
+for i in $(ls *.sorted.bam | rev | cut -c 5- | rev | uniq)
+do
+sbatch -p tier3 -c 1 -t 0-12:00:00 --mem-per-cpu=10G --wrap="samtools index ${i}.bam"
+done
+
+module load java
+
+#!/bin/bash
+for i in $(ls *.sorted.bam | rev | cut -c 25- | rev | uniq)
+do
+sbatch -p tier3 -c 1 -t 0-12:00:00 --mem-per-cpu=10G --wrap="java -Xmx16G -jar /home/cbwsbi/software/pilon-1.24.jar --genome AR-0945.fasta --frags ${i}_L001_aligned.sorted.bam --output ${i} --vcf --tracks --minqual 15"
+done
+
+
+#Have to run this on the head node for some reason, be careful!!!
+#!/bin/bash
+for i in $(ls *.vcf | rev | cut -c 5- | rev | uniq)
+do
+perl -anle 'if ($F[4]!~/\./){print;}' ${i}.vcf | grep -E '(PASS)' > ${i}.vcf.filtered
+done
+
+
+#########################
+#In R
+A <- read.csv("~/Desktop/VCF_transformants/AR0945MRS33_S7.vcf.filtered", sep="\t", head=F)
+B <- read.csv("~/Desktop/VCF_transformants/AR0945MRS32_S6.vcf.filtered", sep="\t", head=F)
+C <- read.csv("~/Desktop/VCF_transformants/AR0945MRS31_S5.vcf.filtered", sep="\t", head=F)
+D <- read.csv("~/Desktop/VCF_derivedstrains/MRS3_S12.vcf.filtered", sep="\t", head=F)
+AR0945 <- read.csv("~/Desktop/VCF_derivedstrains/AR0945_S13.vcf.filtered", sep="\t", head=F)
+
+AR0945 <- AR0945[,-3:-10]
+AR0945$node_position <- with(AR0945, paste(V1, V2, sep="_"))
+
+A <- A[,-3:-10]
+B <- B[,-3:-10]
+C <- C[,-3:-10]
+D <- D[,-3:-10]
+A$node_position <- with(A, paste(V1, V2, sep="_"))
+B$node_position <- with(B, paste(V1, V2, sep="_"))
+C$node_position <- with(C, paste(V1, V2, sep="_"))
+D$node_position <- with(D, paste(V1, V2, sep="_"))
+
+AR0945$x <- rep("x",dim(AR0945) [1])
+AR0945 <- AR0945[,-1:-2]
+
+final <- merge(A, B, by="node_position", all.x=FALSE, all.y=FALSE)
+final <- merge(final, C, by="node_position", all.x=FALSE, all.y=FALSE)
+final <- merge(final, D, by="node_position", all.x=FALSE, all.y=FALSE)
+
+
+final <- merge(final, AR0945, by="node_position", all.x=T, all.y=T)
+wordList <- c("x")
+final <- subset(final, !(x %in% wordList))
+
+write.csv(final, "~/Desktop/final.csv")
+
+#Only 1 mutation shared across all transformant picks also present in donor strain, and not in AR0945 reads mapped back to the reference
+#MRS.3: NODE_4_23055
+#CBW6.2: NODE_4_23104
+#LT.1: NODE_1_283041
+#CBW4.1: NODE_1_283066
+#Other transformants are only Sanger sequenced as of 2/17/21
+
+
+
+
+
+
+
+
