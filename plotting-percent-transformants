@@ -1,0 +1,32 @@
+library(ggplot2)
+library(plyr)
+dat <- read.csv("~/Desktop/Percent-transformants.csv", head=T)
+
+data_summary <- function(data, varname, groupnames){
+  require(plyr)
+  summary_func <- function(x, col){
+    c(mean = mean(x[[col]], na.rm=TRUE),
+      sd = sd(x[[col]], na.rm=TRUE))
+  }
+  data_sum<-ddply(data, groupnames, .fun=summary_func,
+                  varname)
+  data_sum <- rename(data_sum, c("mean" = varname))
+ return(data_sum)
+}
+
+
+df2 <- data_summary(dat, varname="Percent.Transformants", 
+                    groupnames=c("Combined"))
+
+
+
+target <- c("AM1AR0945", "AM128Bl", "AM1FA1090", "CBW41AR0945", "CBW4128Bl", "CBW41FA1090", "JA2AR0945", "JA228Bl", "JA2FA1090", "LT1AR0945", "LT128Bl", "LT1FA1090", "CBW62AR0945", "CBW6228Bl", "CBW62FA1090", "LJT1AR0945", "LJT128Bl", "LJT1FA1090", "MRS3AR0945", "MRS328Bl", "MRS3FA1090", "NoneAR0945", "None28Bl", "NoneFA1090")
+df2<-df2[match(target, df2$Combined),]
+
+
+ggplot(df2, aes(x=Combined, y=Percent.Transformants, fill=Combined))+geom_bar(stat="identity", color="black", position=position_dodge())+geom_errorbar(aes(ymin=Percent.Transformants, ymax=Percent.Transformants+sd), width=.2,position=position_dodge(.9)) + theme_bw() + scale_x_discrete(limits = c("AM1AR0945", "AM128Bl", "AM1FA1090", "CBW41AR0945", "CBW4128Bl", "CBW41FA1090", "JA2AR0945", "JA228Bl", "JA2FA1090", "LT1AR0945", "LT128Bl", "LT1FA1090", "CBW62AR0945", "CBW6228Bl", "CBW62FA1090", "LJT1AR0945", "LJT128Bl", "LJT1FA1090", "MRS3AR0945", "MRS328Bl", "MRS3FA1090", "NoneAR0945", "None28Bl", "NoneFA1090"))
+
+
+
+
+
