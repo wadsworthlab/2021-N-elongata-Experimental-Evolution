@@ -1,0 +1,9 @@
+library(ggplot2)
+library(Rmisc)
+dat<-read.csv("~/Desktop/data.csv", header=TRUE)
+tgc <- summarySE(dat, measurevar="OD.600", groupvars=c("Strain", "Hour"))
+tgc_sub <- subset(tgc, tgc$Hour >0)
+ggplot(tgc_sub), aes(x=Hour, y=OD.600, colour=Strain)) + 
+    geom_errorbar(aes(ymin=OD.600-se, ymax=OD.600+se), width=.1) +
+    geom_line() +
+    geom_point()+theme_bw()
